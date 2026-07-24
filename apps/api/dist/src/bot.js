@@ -5,6 +5,7 @@ import { allow, defaultRoles } from "./security.js";
 import { duration, esc } from "./utils.js";
 import { automod, verifyCaptcha } from "./automod.js";
 import { getSettings } from "./groupSettings.js";
+import { installBotMenus, sendMainMenu } from "./botMenus.js";
 export const bot = new Bot(config.BOT_TOKEN);
 const no = { can_send_messages: false, can_send_audios: false, can_send_documents: false, can_send_photos: false, can_send_videos: false, can_send_video_notes: false, can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false, can_add_web_page_previews: false, can_change_info: false, can_invite_users: false, can_pin_messages: false, can_manage_topics: false }, yes = { ...no, can_send_messages: true, can_send_audios: true, can_send_documents: true, can_send_photos: true, can_send_videos: true, can_send_video_notes: true, can_send_voice_notes: true, can_send_polls: true, can_send_other_messages: true, can_add_web_page_previews: true, can_invite_users: true };
 const name = (u) => [u.first_name, u.last_name].filter(Boolean).join(" ");
@@ -28,7 +29,7 @@ async function target(c, a) { const u = c.message?.reply_to_message?.from; if (u
     return { id: u.id, name: name(u), used: 0 }; const raw = a[0]; if (!raw)
     return null; const groupId = String(c.chat.id), m = raw.startsWith("@") ? await db.member.findFirst({ where: { groupId, username: raw.slice(1) } }) : await db.member.findUnique({ where: { groupId_telegramId: { groupId, telegramId: raw } } }); return m ? { id: Number(m.telegramId), name: m.name, used: 1 } : null; }
 async function record(c, d) { await db.modAction.create({ data: { groupId: String(c.chat.id), type: d.type, actorId: String(c.from.id), actorName: name(c.from), targetId: d.t ? String(d.t.id) : null, targetName: d.t?.name, reason: d.reason, expiresAt: d.expiresAt, status: d.status ?? (d.expiresAt ? "ACTIVE" : "RESOLVED") } }); }
-bot.command("start", c => c.reply("🛡 <b>Ravvo Control подключён</b>\n\nПрофессиональное управление сообществом, модерация и заявки — в одном Mini App.\n\n<i>Бот принадлежит Ravvo</i>", { parse_mode: "HTML" }));
+bot.command("start", sendMainMenu);
 bot.command("help", c => c.reply(ravvo("🛡 Команды управления\n\n/ban [user] 15m причина\n/mute [user] 1h причина\n/unmute [user]\n/kick [user] причина\n/delete — ответом\n/role give|remove [user] роль\n/rules\n/setrules текст\n/announce текст")));
 for (const command of ["ban", "mute"])
     bot.command(command, async (c) => { const type = command.toUpperCase(); if (!await guard(c, type))
@@ -84,6 +85,7 @@ bot.command("unwarn", async (c) => { if (!await guard(c, "MUTE"))
 bot.command("report", async (c) => { if (!c.message || !c.from)
     return; const msg = c.message.reply_to_message; if (!msg)
     return void c.reply(ravvo("Используйте /report ответом на проблемное сообщение.")); const reporter = c.from.username ? `@${c.from.username}` : name(c.from), targetName = msg.from ? (msg.from.username ? `@${msg.from.username}` : name(msg.from)) : "неизвестного пользователя"; await c.reply(`🚨 <b>Жалоба участника</b>\n\n<b>От:</b> ${esc(reporter)}\n<b>На:</b> ${esc(targetName)}\nАдминистраторы, проверьте сообщение выше.\n\n<i>Ravvo Report System</i>`, { parse_mode: "HTML", reply_parameters: { message_id: msg.message_id } }); });
+installBotMenus(bot);
 bot.catch(e => { console.error(e.error); e.ctx.reply(ravvo("⚠️ Не удалось выполнить действие. Проверьте права бота.")).catch(() => { }); });
 export async function expire() { const list = await db.modAction.findMany({ where: { status: "ACTIVE", expiresAt: { lte: new Date() } } }); for (const a of list)
     try {
