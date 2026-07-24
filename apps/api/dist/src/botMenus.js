@@ -2,6 +2,7 @@ import { InlineKeyboard, InputFile } from "grammy";
 import { join } from "node:path";
 import { config } from "./config.js";
 import { db } from "./db.js";
+import { getSettings, saveSettings } from "./groupSettings.js";
 import { allow } from "./security.js";
 import { esc } from "./utils.js";
 const flows = new Map();
@@ -13,6 +14,8 @@ const mainKeyboard = () => new InlineKeyboard()
     .row()
     .text("⏰ НАПОМИНАНИЯ", "menu:reminder")
     .text("🛡 МОДЕРАЦИЯ", "menu:moderation")
+    .row()
+    .text("👋 ПРИВЕТСТВИЕ И ПРОЩАНИЕ", "menu:greeting")
     .row()
     .text("🧩 ЗАКАЗАТЬ JAVA-ПЛАГИН", "plugin:start")
     .row()
@@ -69,6 +72,13 @@ async function beginAdminFlow(c, action, groupId) {
         flows.set(key(c), { kind: "rules", step: "text", groupId });
         return c.reply("📜 <b>НОВЫЕ ПРАВИЛА</b>\n━━━━━━━━━━━━━━━━━━━━\n\nОтправьте полный текст правил одним сообщением.\n\n/cancel — отменить", { parse_mode: "HTML" });
     }
+    if (action === "greeting") {
+        flows.set(key(c), { kind: "greeting", step: "welcome", groupId });
+        return c.reply("👋 <b>ТЕКСТ ПРИВЕТСТВИЯ</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
+            "Отправьте сообщение для новых участников.\n\n" +
+            "Переменные:\n<code>{user}</code> — имя участника\n<code>{group}</code> — название группы\n\n" +
+            "Отправьте <code>-</code>, чтобы отключить приветствие.", { parse_mode: "HTML" });
+    }
     flows.set(key(c), { kind: "reminder", step: "text", groupId });
     return c.reply("⏰ <b>НОВОЕ НАПОМИНАНИЕ</b>\n━━━━━━━━━━━━━━━━━━━━\n\nСначала отправьте текст, который бот будет публиковать.\n\n/cancel — отменить", { parse_mode: "HTML" });
 }
@@ -84,11 +94,24 @@ function parseButtons(text) {
     }
     return buttons.slice(0, 12);
 }
+async function sendDecision(bot, c, userId, accepted, reason) {
+    const title = accepted ? "✅ ВАША ЗАЯВКА ПРИНЯТА" : "❌ ВАША ЗАЯВКА ОТКЛОНЕНА";
+    const body = accepted
+        ? "Администратор Ravvo принял ваш заказ и сможет связаться с вами."
+        : "Администратор Ravvo рассмотрел заказ и пока не может его принять.";
+    const reasonBlock = reason ? `\n\n💬 <b>Комментарий администратора:</b>\n${esc(reason)}` : "";
+    await bot.api
+        .sendMessage(userId, `${title}\n━━━━━━━━━━━━━━━━━━━━\n\n${body}${reasonBlock}\n\n<i>Ravvo</i>`, { parse_mode: "HTML" })
+        .catch(() => { });
+    await c.reply(`📨 <b>РЕШЕНИЕ ОТПРАВЛЕНО ПОКУПАТЕЛЮ</b>${reason ? "\n\nКомментарий также отправлен." : ""}`, {
+        parse_mode: "HTML",
+    });
+}
 export function installBotMenus(bot) {
     bot.command("menu", sendMainMenu);
     bot.command("order", async (c) => {
         flows.set(key(c), { kind: "plugin", step: "idea" });
-        await c.reply("🧩 <b>ЗАКАЗ JAVA-ПЛАГИНА</b>\n━━━━━━━━━━━━━━━━━━━━\n\n<b>Шаг 1 из 4</b>\nПодробно опишите идею и функции плагина.\n\n/cancel — отменить", { parse_mode: "HTML" });
+        await c.reply("🧩 <b>ЗАКАЗ JAVA-ПЛАГИНА</b>\n━━━━━━━━━━━━━━━━━━━━\n\n<b>Шаг 1 из 5</b>\nПодробно опишите идею и функции плагина.\n\n/cancel — отменить", { parse_mode: "HTML" });
     });
     bot.command("cancel", async (c) => {
         flows.delete(key(c));
@@ -101,7 +124,7 @@ export function installBotMenus(bot) {
     bot.callbackQuery("plugin:start", async (c) => {
         await c.answerCallbackQuery();
         flows.set(key(c), { kind: "plugin", step: "idea" });
-        await c.reply("🧩 <b>ЗАКАЗ JAVA-ПЛАГИНА</b>\n━━━━━━━━━━━━━━━━━━━━\n\n<b>Шаг 1 из 4</b>\nПодробно опишите идею и функции плагина.\n\n/cancel — отменить", { parse_mode: "HTML" });
+        await c.reply("🧩 <b>ЗАКАЗ JAVA-ПЛАГИНА</b>\n━━━━━━━━━━━━━━━━━━━━\n\n<b>Шаг 1 из 5</b>\nПодробно опишите идею и функции плагина.\n\n/cancel — отменить", { parse_mode: "HTML" });
     });
     bot.callbackQuery("menu:post", async (c) => {
         await c.answerCallbackQuery();
@@ -115,7 +138,11 @@ export function installBotMenus(bot) {
         await c.answerCallbackQuery();
         await chooseGroup(c, "reminder", "ANNOUNCE");
     });
-    bot.callbackQuery(/^select:(post|rules|reminder):(-?\d+)$/, async (c) => {
+    bot.callbackQuery("menu:greeting", async (c) => {
+        await c.answerCallbackQuery();
+        await chooseGroup(c, "greeting", "RULES_MANAGE");
+    });
+    bot.callbackQuery(/^select:(post|rules|reminder|greeting):(-?\d+)$/, async (c) => {
         await c.answerCallbackQuery();
         if (!c.from || String(c.from.id) !== config.ADMIN_TELEGRAM_ID)
             return denied(c);
@@ -147,13 +174,25 @@ export function installBotMenus(bot) {
         }
         const accepted = c.match[1] === "accept";
         const userId = Number(c.match[2]);
-        await c.answerCallbackQuery({ text: accepted ? "Заявка принята" : "Заявка отклонена" });
-        await c.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text(accepted ? "✅ ПРИНЯТО" : "❌ ОТКЛОНЕНО", "done") });
-        await bot.api
-            .sendMessage(userId, accepted
-            ? "✅ <b>ВАША ЗАЯВКА ПРИНЯТА</b>\n\nАдминистратор Ravvo рассмотрел идею и принял заказ."
-            : "❌ <b>ЗАЯВКА НЕ ПРИНЯТА</b>\n\nАдминистратор Ravvo рассмотрел ваш запрос.", { parse_mode: "HTML" })
-            .catch(() => { });
+        flows.set(key(c), { kind: "decision", step: "reason", userId, accepted });
+        await c.answerCallbackQuery({ text: accepted ? "Вы выбрали: принять" : "Вы выбрали: отклонить" });
+        await c.editMessageReplyMarkup({
+            reply_markup: new InlineKeyboard().text(accepted ? "✅ ВЫБРАНО: ПРИНЯТЬ" : "❌ ВЫБРАНО: ОТКЛОНИТЬ", "done"),
+        });
+        await c.reply(`${accepted ? "✅" : "❌"} <b>${accepted ? "ПРИНЯТИЕ ЗАКАЗА" : "ОТКЛОНЕНИЕ ЗАКАЗА"}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n` +
+            "Напишите причину или комментарий для покупателя.", {
+            parse_mode: "HTML",
+            reply_markup: new InlineKeyboard().text("⏭ ПРОПУСТИТЬ ПРИЧИНУ", "reason:skip"),
+        });
+    });
+    bot.callbackQuery("reason:skip", async (c) => {
+        const flow = flows.get(key(c));
+        if (!flow || flow.kind !== "decision" || String(c.from.id) !== config.ADMIN_TELEGRAM_ID) {
+            return c.answerCallbackQuery({ text: "Нет ожидающего решения", show_alert: true });
+        }
+        await c.answerCallbackQuery();
+        flows.delete(key(c));
+        await sendDecision(bot, c, flow.userId, flow.accepted);
     });
     bot.callbackQuery("done", (c) => c.answerCallbackQuery());
     bot.on("message:text", async (c) => {
@@ -167,21 +206,26 @@ export function installBotMenus(bot) {
             if (flow.step === "idea") {
                 flow.idea = text;
                 flow.step = "version";
-                return c.reply("🎮 <b>ШАГ 2 ИЗ 4</b>\n\nУкажите версию Minecraft.\nНапример: <code>1.20.1</code>", { parse_mode: "HTML" });
+                return c.reply("🎮 <b>ШАГ 2 ИЗ 5</b>\n\nУкажите версию Minecraft.\nНапример: <code>1.20.1</code>", { parse_mode: "HTML" });
             }
             if (flow.step === "version") {
                 flow.version = text;
                 flow.step = "core";
-                return c.reply("⚙️ <b>ШАГ 3 ИЗ 4</b>\n\nУкажите ядро сервера.\nНапример: <code>Paper, Spigot, Purpur</code>", {
+                return c.reply("⚙️ <b>ШАГ 3 ИЗ 5</b>\n\nУкажите ядро сервера.\nНапример: <code>Paper, Spigot, Purpur</code>", {
                     parse_mode: "HTML",
                 });
             }
             if (flow.step === "core") {
                 flow.core = text;
                 flow.step = "java";
-                return c.reply("☕ <b>ШАГ 4 ИЗ 4</b>\n\nУкажите версию Java.\nНапример: <code>Java 17</code> или <code>Java 21</code>", {
+                return c.reply("☕ <b>ШАГ 4 ИЗ 5</b>\n\nУкажите версию Java.\nНапример: <code>Java 17</code> или <code>Java 21</code>", {
                     parse_mode: "HTML",
                 });
+            }
+            if (flow.step === "java") {
+                flow.java = text;
+                flow.step = "budget";
+                return c.reply("💰 <b>ШАГ 5 ИЗ 5</b>\n\nСколько вы готовы заплатить за разработку?\nНапример: <code>5 000 ₽</code>, <code>50 $</code> или «предложите цену».", { parse_mode: "HTML" });
             }
             flows.delete(key(c));
             const user = c.from;
@@ -193,7 +237,8 @@ export function installBotMenus(bot) {
                 `🆔 <b>Telegram ID:</b> <code>${user.id}</code>\n\n` +
                 `🎮 <b>Minecraft:</b> ${esc(flow.version ?? "—")}\n` +
                 `⚙️ <b>Ядро:</b> ${esc(flow.core ?? "—")}\n` +
-                `☕ <b>Java:</b> ${esc(text)}\n\n` +
+                `☕ <b>Java:</b> ${esc(flow.java ?? "—")}\n` +
+                `💰 <b>Бюджет:</b> ${esc(text)}\n\n` +
                 `💡 <b>ИДЕЯ И ФУНКЦИИ</b>\n${esc(flow.idea ?? "—")}\n\n` +
                 "<i>Заявка получена через Ravvo</i>";
             if (config.ADMIN_TELEGRAM_ID) {
@@ -206,6 +251,10 @@ export function installBotMenus(bot) {
             }
             return c.reply("✅ <b>ЗАЯВКА ОТПРАВЛЕНА</b>\n━━━━━━━━━━━━━━━━━━━━\n\nАдминистратор Ravvo получил всю информацию и ваш профиль.\nОжидайте решения.", { parse_mode: "HTML", reply_markup: mainKeyboard() });
         }
+        if (flow.kind === "decision") {
+            flows.delete(key(c));
+            return sendDecision(bot, c, flow.userId, flow.accepted, text);
+        }
         if (flow.kind === "rules") {
             await db.group.update({ where: { id: flow.groupId }, data: { rules: text } });
             flows.delete(key(c));
@@ -213,6 +262,28 @@ export function installBotMenus(bot) {
                 parse_mode: "HTML",
             });
             return c.reply("✅ <b>ПРАВИЛА СОХРАНЕНЫ И ОПУБЛИКОВАНЫ</b>", { parse_mode: "HTML" });
+        }
+        if (flow.kind === "greeting" && flow.step === "welcome") {
+            flow.welcomeText = text;
+            flow.step = "goodbye";
+            return c.reply("👋 <b>ТЕКСТ ПРОЩАНИЯ</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
+                "Теперь отправьте сообщение для участника, который покидает группу.\n\n" +
+                "Можно использовать <code>{user}</code> и <code>{group}</code>.\n" +
+                "Отправьте <code>-</code>, чтобы отключить прощание.", { parse_mode: "HTML" });
+        }
+        if (flow.kind === "greeting") {
+            const current = await getSettings(flow.groupId);
+            await saveSettings(flow.groupId, {
+                ...current,
+                welcomeEnabled: flow.welcomeText !== "-",
+                welcomeText: flow.welcomeText === "-" ? current.welcomeText : flow.welcomeText,
+                goodbyeEnabled: text !== "-",
+                goodbyeText: text === "-" ? current.goodbyeText : text,
+            });
+            flows.delete(key(c));
+            return c.reply("✅ <b>ПРИВЕТСТВИЕ И ПРОЩАНИЕ СОХРАНЕНЫ</b>\n\n" +
+                `${flow.welcomeText === "-" ? "⚪ Приветствие выключено" : "🟢 Приветствие включено"}\n` +
+                `${text === "-" ? "⚪ Прощание выключено" : "🟢 Прощание включено"}`, { parse_mode: "HTML", reply_markup: mainKeyboard() });
         }
         if (flow.kind === "post" && flow.step === "text") {
             flow.text = text;
