@@ -1,0 +1,6 @@
+import "dotenv/config";
+import { PrismaClient } from "@prisma/client";
+const db = new PrismaClient();
+async function main() { const g = await db.group.upsert({ where: { id: "-1000000000001" }, update: {}, create: { id: "-1000000000001", title: "Sentinel Demo Community", rules: "1. Уважайте участников.\n2. Без спама.\n3. Соблюдайте тематику." } }); const map = { owner: ["BAN", "MUTE", "KICK", "DELETE", "ROLE_MANAGE", "RULES_MANAGE", "ANNOUNCE", "VIEW_LOG"], moderator: ["BAN", "MUTE", "KICK", "DELETE", "VIEW_LOG"], editor: ["RULES_MANAGE", "ANNOUNCE", "VIEW_LOG"] }; for (const [name, p] of Object.entries(map))
+    await db.role.upsert({ where: { groupId_name: { groupId: g.id, name } }, update: {}, create: { groupId: g.id, name, permissions: JSON.stringify(p), system: true, color: name === "owner" ? "#F5B84B" : name === "moderator" ? "#7C5CFF" : "#36CFA0" } }); }
+main().finally(() => db.$disconnect());
