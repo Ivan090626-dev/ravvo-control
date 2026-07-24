@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "sqlite"
+  url = env("DATABASE_URL")
+}
+model Group {
+  id String @id
+  title String
+  rules String @default("Правила ещё не настроены.")
+  settings String @default("{}")
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  members Member[]
+  roles Role[]
+  actions ModAction[]
+  announcements Announcement[]
+  reminders Reminder[]
+}
+model Member {
+  id Int @id @default(autoincrement())
+  groupId String
+  telegramId String
+  username String?
+  name String
+  nativeAdmin Boolean @default(false)
+  group Group @relation(fields:[groupId],references:[id],onDelete:Cascade)
+  roles MemberRole[]
+  @@unique([groupId,telegramId])
+  @@index([groupId,username])
+}
+model Role {
+  id Int @id @default(autoincrement())
+  groupId String
+  name String
+  color String @default("#7C5CFF")
+  permissions String @default("[]")
+  system Boolean @default(false)
+  group Group @relation(fields:[groupId],references:[id],onDelete:Cascade)
+  members MemberRole[]
+  @@unique([groupId,name])
+}
+model MemberRole {
+  memberId Int
+  roleId Int
+  member Member @relation(fields:[memberId],references:[id],onDelete:Cascade)
+  role Role @relation(fields:[roleId],references:[id],onDelete:Cascade)
+  @@id([memberId,roleId])
+}
+model ModAction {
+  id Int @id @default(autoincrement())
+  groupId String
+  type String
+  actorId String
+  actorName String
+  targetId String?
+  targetName String?
+  reason String?
+  status String @default("ACTIVE")
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  resolvedAt DateTime?
+  group Group @relation(fields:[groupId],references:[id],onDelete:Cascade)
+  @@index([status,expiresAt])
+}
+model Announcement {
+  id Int @id @default(autoincrement())
+  groupId String
+  authorId String
+  title String?
+  text String
+  messageId String?
+  buttons String @default("[]")
+  createdAt DateTime @default(now())
+  group Group @relation(fields:[groupId],references:[id],onDelete:Cascade)
+}
+
+model Reminder {
+  id Int @id @default(autoincrement())
+  groupId String
+  text String
+  intervalHours Float
+  enabled Boolean @default(true)
+  nextRunAt DateTime
+  lastRunAt DateTime?
+  createdAt DateTime @default(now())
+  group Group @relation(fields:[groupId],references:[id],onDelete:Cascade)
+  @@index([enabled,nextRunAt])
+}
