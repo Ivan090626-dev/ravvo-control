@@ -87,6 +87,8 @@ bot.command("unwarn", async (c) => { if (!await guard(c, "MUTE"))
 bot.command("report", async (c) => { if (!c.message || !c.from)
     return; const msg = c.message.reply_to_message; if (!msg)
     return void c.reply("Ответьте командой /report на сообщение."); const reporter = c.from.username ? `@${c.from.username}` : name(c.from), targetName = msg.from ? (msg.from.username ? `@${msg.from.username}` : name(msg.from)) : "неизвестного пользователя"; await c.reply(`<b>Жалоба отправлена</b>\n\nОт: ${esc(reporter)}\nНа: ${esc(targetName)}\n\nАдминистраторы получили уведомление.`, { parse_mode: "HTML", reply_parameters: { message_id: msg.message_id } }); });
+bot.on("my_chat_member", async (c) => { const status = c.myChatMember.new_chat_member.status; if (!["member", "administrator"].includes(status) || !["group", "supergroup"].includes(c.chat.type))
+    return; const admin = status === "administrator"; await c.reply(`<b>Ravvo подключён</b>\n\n${admin ? "Бот получил административные права и готов к настройке." : "Бот добавлен как обычный участник. Для полноценной модерации назначьте его администратором."}\n\n<b>Рекомендуемый порядок настройки</b>\n1. Откройте /settings.\n2. Настройте приветствие и правила.\n3. Включите CAPTCHA, защиту ссылок и стоп-слова.\n4. Проверьте права модераторов.\n\nСправка по всем командам доступна через /help.`, { parse_mode: "HTML" }); });
 installExtraCommands(bot);
 installBotMenus(bot);
 bot.catch(e => { console.error(e.error); e.ctx.reply("<b>Не удалось выполнить действие</b>\n\nПроверьте права бота и формат команды.", { parse_mode: "HTML" }).catch(() => { }); });

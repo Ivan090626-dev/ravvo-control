@@ -17,8 +17,10 @@ type Flow =
 
 const flows = new Map<string, Flow>();
 const key = (c: Context) => `${c.chat?.id}:${c.from?.id}`;
-const mainKeyboard = () =>
-  new InlineKeyboard()
+const mainKeyboard = (addUrl?: string) => {
+  const keyboard = new InlineKeyboard();
+  if (addUrl) keyboard.url("Добавить Ravvo в группу", addUrl).row();
+  return keyboard
     .text("Создать пост", "menu:post")
     .text("Правила", "menu:rules")
     .row()
@@ -32,13 +34,27 @@ const mainKeyboard = () =>
     .text("Заказать Java-плагин", "plugin:start")
     .row()
     .text("Команды", "menu:commands");
+};
 
 export async function sendMainMenu(c: Context) {
+  const me = await c.api.getMe();
+  const permissions = [
+    "change_info",
+    "delete_messages",
+    "restrict_members",
+    "invite_users",
+    "pin_messages",
+    "manage_video_chats",
+    "manage_topics",
+  ].join("+");
+  const addUrl = `https://t.me/${me.username}?startgroup=ravvo&admin=${permissions}`;
   const caption =
-    "<b>Ravvo</b>\n" +
-    "Управление сообществом\n\n" +
-    "Выберите раздел.";
-  await c.reply(caption, { parse_mode: "HTML", reply_markup: mainKeyboard() });
+    "👋 <b>Приветствую!</b>\n\n" +
+    "Ravvo — виртуальный модератор вашей группы. Я помогу управлять участниками, публикациями, правилами и автоматической защитой сообщества.\n\n" +
+    "❗️ <b>Какие команды доступны?</b>\n" +
+    "Отправьте /help, чтобы открыть полный список возможностей.\n\n" +
+    "Чтобы подключить Ravvo, нажмите кнопку ниже и выберите группу, в которой у вас есть право добавлять администраторов.";
+  await c.reply(caption, { parse_mode: "HTML", reply_markup: mainKeyboard(addUrl) });
 }
 
 async function denied(c: Context) {
@@ -55,8 +71,29 @@ async function chooseGroup(c: Context, action: GroupAction, permission: Permissi
     if (!(await allow(String(c.chat.id), String(c.from.id), permission))) return denied(c);
     return beginAdminFlow(c, action, String(c.chat.id));
   }
-  if (String(c.from.id) !== config.ADMIN_TELEGRAM_ID) return denied(c);
-  const groups = await db.group.findMany({ where: { active: true }, orderBy: { updatedAt: "desc" }, take: 40 });
+  let groups;
+  if (String(c.from.id) === config.ADMIN_TELEGRAM_ID) {
+    groups = await db.group.findMany({ where: { active: true }, orderBy: { updatedAt: "desc" }, take: 40 });
+  } else {
+    const memberships = await db.member.findMany({
+      where: { telegramId: String(c.from.id), group: { active: true } },
+      include: { group: true, roles: { include: { role: true } } },
+      take: 80,
+    });
+    groups = memberships
+      .filter((member) => {
+        if (member.nativeAdmin) return true;
+        return member.roles.some((item) => {
+          try {
+            return (JSON.parse(item.role.permissions) as string[]).includes(permission);
+          } catch {
+            return false;
+          }
+        });
+      })
+      .map((member) => member.group)
+      .slice(0, 40);
+  }
   if (!groups.length) {
     return c.reply("<b>Группы не найдены</b>\n\nДобавьте бота в группу и отправьте /start.", {
       parse_mode: "HTML",
@@ -228,8 +265,14 @@ export function installBotMenus(bot: Bot) {
   });
   bot.callbackQuery(/^select:(post|rules|reminder|greeting|protection):(-?\d+)$/, async (c) => {
     await c.answerCallbackQuery();
-    if (!c.from || String(c.from.id) !== config.ADMIN_TELEGRAM_ID) return denied(c);
-    await beginAdminFlow(c, c.match[1] as GroupAction, c.match[2]);
+    const action = c.match[1] as GroupAction;
+    const groupId = c.match[2];
+    const permission: Permission =
+      action === "post" || action === "reminder" ? "ANNOUNCE" : action === "rules" || action === "greeting" ? "RULES_MANAGE" : "MUTE";
+    if (!c.from || (String(c.from.id) !== config.ADMIN_TELEGRAM_ID && !(await allow(groupId, String(c.from.id), permission)))) {
+      return denied(c);
+    }
+    await beginAdminFlow(c, action, groupId);
   });
   bot.callbackQuery(/^protect:toggle:(captcha|links|words|flood|caps|forwards|media):(-?\d+)$/, async (c) => {
     await c.answerCallbackQuery();
