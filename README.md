@@ -38,7 +38,10 @@ npm run dev
 - `/menu` — главное меню;
 - `/order` — заказ Java-плагина;
 - `/ban`, `/mute`, `/unmute`, `/kick`, `/delete`;
-- `/warn`, `/unwarn`, `/report`;
+- `/unban`, `/warn`, `/unwarn`, `/warns`, `/report`;
+- `/purge`, `/pin`, `/pinned`, `/unpinall`;
+- `/silence`, `/unsilence`, `/send`;
+- `/info`, `/staff`, `/me`, `/chatid`, `/link`, `/reload`;
 - `/role give/remove`;
 - `/rules`, `/setrules`, `/announce`.
 
