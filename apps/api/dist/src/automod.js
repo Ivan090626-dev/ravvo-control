@@ -1,4 +1,5 @@
 import { InlineKeyboard } from "grammy";
+import { db } from "./db.js";
 import { getSettings } from "./groupSettings.js";
 import { esc } from "./utils.js";
 const flood = new Map();
@@ -10,6 +11,26 @@ async function remove(c, reason) { try {
 }
 catch { } try {
     await c.reply(`<b>Сообщение удалено</b>\n${esc(reason)}`, { parse_mode: "HTML" });
+}
+catch { } }
+async function autoWarn(c, settings, reason) { if (!c.chat || !c.from)
+    return; const groupId = String(c.chat.id), targetId = String(c.from.id), targetName = c.from.username ? `@${c.from.username}` : c.from.first_name; await db.modAction.create({ data: { groupId, type: "WARN", actorId: "0", actorName: "Ravvo AutoMod", targetId, targetName, reason, status: "ACTIVE" } }); const count = await db.modAction.count({ where: { groupId, targetId, type: "WARN", status: "ACTIVE" } }); let result = `Предупреждений: ${count} из ${settings.warnLimit}.`; if (count >= settings.warnLimit) {
+    if (settings.warnAction === "ban") {
+        await c.api.banChatMember(c.chat.id, c.from.id);
+        result = "Лимит достигнут. Участник заблокирован.";
+    }
+    else if (settings.warnAction === "kick") {
+        await c.api.banChatMember(c.chat.id, c.from.id);
+        await c.api.unbanChatMember(c.chat.id, c.from.id);
+        result = "Лимит достигнут. Участник исключён.";
+    }
+    else {
+        await c.api.restrictChatMember(c.chat.id, c.from.id, restricted, { until_date: Math.floor(Date.now() / 1000) + 3600 });
+        result = "Лимит достигнут. Участник ограничен на 1 час.";
+    }
+    await db.modAction.updateMany({ where: { groupId, targetId, type: "WARN", status: "ACTIVE" }, data: { status: "RESOLVED", resolvedAt: new Date() } });
+} try {
+    await c.reply(`<b>Автоматическое предупреждение</b>\n\n${esc(targetName)}\nПричина: ${esc(reason)}\n${result}`, { parse_mode: "HTML" });
 }
 catch { } }
 export async function automod(c, next) {
@@ -67,8 +88,10 @@ export async function automod(c, next) {
         if (!allowed)
             return remove(c, "ссылки запрещены");
     }
-    if (settings.badWordsEnabled && settings.badWords.some(w => w && text.toLowerCase().includes(w.toLowerCase())))
-        return remove(c, "запрещённое слово");
+    if (settings.badWordsEnabled && settings.badWords.some(w => w && text.toLowerCase().includes(w.toLowerCase()))) {
+        await remove(c, "Обнаружено запрещённое слово или выражение.");
+        return autoWarn(c, settings, "Использование запрещённого выражения");
+    }
     if (settings.antiCaps && text.length >= 10) {
         const letters = [...text].filter(x => /[A-Za-zА-ЯЁа-яё]/.test(x)), upper = letters.filter(x => x === x.toUpperCase() && x !== x.toLowerCase()).length;
         if (letters.length && upper / letters.length * 100 >= settings.capsPercent)

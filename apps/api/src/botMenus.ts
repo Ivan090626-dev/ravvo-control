@@ -1,7 +1,7 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
 import { config } from "./config.js";
 import { db } from "./db.js";
-import { getSettings, saveSettings } from "./groupSettings.js";
+import { getSettings, GroupSettings, saveSettings } from "./groupSettings.js";
 import { allow, Permission } from "./security.js";
 import { esc } from "./utils.js";
 import { sendSticker, sticker } from "./brand.js";
@@ -12,6 +12,7 @@ type Flow =
   | { kind: "rules"; step: "text"; groupId: string }
   | { kind: "reminder"; step: "text" | "interval"; groupId: string; text?: string }
   | { kind: "greeting"; step: "welcome" | "goodbye"; groupId: string; welcomeText?: string }
+  | { kind: "protection"; step: "words" | "domains" | "warnLimit"; groupId: string }
   | { kind: "decision"; step: "reason"; userId: number; accepted: boolean };
 
 const flows = new Map<string, Flow>();
@@ -23,6 +24,8 @@ const mainKeyboard = () =>
     .row()
     .text("Напоминания", "menu:reminder")
     .text("Модерация", "menu:moderation")
+    .row()
+    .text("Защита группы", "menu:protection")
     .row()
     .text("Приветствие и прощание", "menu:greeting")
     .row()
@@ -44,7 +47,9 @@ async function denied(c: Context) {
   });
 }
 
-async function chooseGroup(c: Context, action: "post" | "rules" | "reminder" | "greeting", permission: Permission) {
+type GroupAction = "post" | "rules" | "reminder" | "greeting" | "protection";
+
+async function chooseGroup(c: Context, action: GroupAction, permission: Permission) {
   if (!c.from || !c.chat) return;
   if (c.chat.type === "group" || c.chat.type === "supergroup") {
     if (!(await allow(String(c.chat.id), String(c.from.id), permission))) return denied(c);
@@ -65,7 +70,7 @@ async function chooseGroup(c: Context, action: "post" | "rules" | "reminder" | "
   });
 }
 
-async function beginAdminFlow(c: Context, action: "post" | "rules" | "reminder" | "greeting", groupId: string) {
+async function beginAdminFlow(c: Context, action: GroupAction, groupId: string) {
   if (action === "post") {
     flows.set(key(c), { kind: "post", step: "text", groupId });
     return c.reply(
@@ -90,10 +95,60 @@ async function beginAdminFlow(c: Context, action: "post" | "rules" | "reminder" 
       { parse_mode: "HTML" },
     );
   }
+  if (action === "protection") return showProtection(c, groupId);
   flows.set(key(c), { kind: "reminder", step: "text", groupId });
   return c.reply(
     "<b>Новое напоминание</b>\n\nОтправьте текст.\n\n/cancel — отменить",
     { parse_mode: "HTML" },
+  );
+}
+
+const protectionFields: Record<string, keyof Pick<GroupSettings, "captchaEnabled" | "antiLinks" | "badWordsEnabled" | "antiFlood" | "antiCaps" | "blockForwards" | "blockMedia">> = {
+  captcha: "captchaEnabled",
+  links: "antiLinks",
+  words: "badWordsEnabled",
+  flood: "antiFlood",
+  caps: "antiCaps",
+  forwards: "blockForwards",
+  media: "blockMedia",
+};
+
+const state = (enabled: boolean) => (enabled ? "Включено" : "Выключено");
+const actionName = (action: GroupSettings["warnAction"]) => ({ mute: "Мут на 1 час", kick: "Исключение", ban: "Блокировка" })[action];
+
+async function showProtection(c: Context, groupId: string) {
+  const settings = await getSettings(groupId);
+  const keyboard = new InlineKeyboard()
+    .text(`CAPTCHA · ${state(settings.captchaEnabled)}`, `protect:toggle:captcha:${groupId}`)
+    .row()
+    .text(`Ссылки · ${state(settings.antiLinks)}`, `protect:toggle:links:${groupId}`)
+    .text(`Стоп-слова · ${state(settings.badWordsEnabled)}`, `protect:toggle:words:${groupId}`)
+    .row()
+    .text(`Антифлуд · ${state(settings.antiFlood)}`, `protect:toggle:flood:${groupId}`)
+    .text(`Капс · ${state(settings.antiCaps)}`, `protect:toggle:caps:${groupId}`)
+    .row()
+    .text(`Пересылки · ${state(settings.blockForwards)}`, `protect:toggle:forwards:${groupId}`)
+    .text(`Медиа · ${state(settings.blockMedia)}`, `protect:toggle:media:${groupId}`)
+    .row()
+    .text("Изменить запрещённые слова", `protect:edit:words:${groupId}`)
+    .row()
+    .text("Изменить разрешённые домены", `protect:edit:domains:${groupId}`)
+    .row()
+    .text(`Лимит варнов · ${settings.warnLimit}`, `protect:edit:warnLimit:${groupId}`)
+    .row()
+    .text(`Наказание · ${actionName(settings.warnAction)}`, `protect:action:${groupId}`)
+    .row()
+    .text("Вернуться в меню", "menu:home");
+  await c.reply(
+    "<b>Защита группы</b>\n\n" +
+      "Настройте автоматическую модерацию. Изменения применяются сразу.\n\n" +
+      "<b>CAPTCHA</b> ограничивает новых участников до подтверждения входа.\n" +
+      "<b>Ссылки</b> удаляет публикации с неразрешёнными адресами.\n" +
+      "<b>Стоп-слова</b> удаляет сообщение и выдаёт участнику предупреждение.\n" +
+      "<b>Антифлуд</b> останавливает частые повторные сообщения.\n" +
+      "<b>Капс</b> ограничивает сообщения с большим количеством заглавных букв.\n" +
+      "<b>Пересылки и медиа</b> позволяют полностью запретить соответствующий контент.",
+    { parse_mode: "HTML", reply_markup: keyboard },
   );
 }
 
@@ -167,10 +222,56 @@ export function installBotMenus(bot: Bot) {
     await c.answerCallbackQuery();
     await chooseGroup(c, "greeting", "RULES_MANAGE");
   });
-  bot.callbackQuery(/^select:(post|rules|reminder|greeting):(-?\d+)$/, async (c) => {
+  bot.callbackQuery("menu:protection", async (c) => {
+    await c.answerCallbackQuery();
+    await chooseGroup(c, "protection", "MUTE");
+  });
+  bot.callbackQuery(/^select:(post|rules|reminder|greeting|protection):(-?\d+)$/, async (c) => {
     await c.answerCallbackQuery();
     if (!c.from || String(c.from.id) !== config.ADMIN_TELEGRAM_ID) return denied(c);
-    await beginAdminFlow(c, c.match[1] as "post" | "rules" | "reminder" | "greeting", c.match[2]);
+    await beginAdminFlow(c, c.match[1] as GroupAction, c.match[2]);
+  });
+  bot.callbackQuery(/^protect:toggle:(captcha|links|words|flood|caps|forwards|media):(-?\d+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const groupId = c.match[2];
+    if (!c.from || (String(c.from.id) !== config.ADMIN_TELEGRAM_ID && !(await allow(groupId, String(c.from.id), "MUTE")))) return denied(c);
+    const current = await getSettings(groupId);
+    const field = protectionFields[c.match[1]];
+    await saveSettings(groupId, { ...current, [field]: !current[field] });
+    await c.reply(`<b>Настройка изменена</b>\n\n${state(!current[field])}. Новые сообщения будут проверяться по обновлённым правилам.`, {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().text("Открыть защиту", `protect:open:${groupId}`),
+    });
+  });
+  bot.callbackQuery(/^protect:open:(-?\d+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    await showProtection(c, c.match[1]);
+  });
+  bot.callbackQuery(/^protect:action:(-?\d+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const groupId = c.match[1];
+    if (!c.from || (String(c.from.id) !== config.ADMIN_TELEGRAM_ID && !(await allow(groupId, String(c.from.id), "MUTE")))) return denied(c);
+    const current = await getSettings(groupId);
+    const next: GroupSettings["warnAction"] = current.warnAction === "mute" ? "kick" : current.warnAction === "kick" ? "ban" : "mute";
+    await saveSettings(groupId, { ...current, warnAction: next });
+    await c.reply(`<b>Наказание изменено</b>\n\nПосле достижения лимита: ${actionName(next)}.`, {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().text("Открыть защиту", `protect:open:${groupId}`),
+    });
+  });
+  bot.callbackQuery(/^protect:edit:(words|domains|warnLimit):(-?\d+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const groupId = c.match[2];
+    if (!c.from || (String(c.from.id) !== config.ADMIN_TELEGRAM_ID && !(await allow(groupId, String(c.from.id), "MUTE")))) return denied(c);
+    const field = c.match[1] as "words" | "domains" | "warnLimit";
+    flows.set(key(c), { kind: "protection", step: field, groupId });
+    const prompt =
+      field === "words"
+        ? "<b>Запрещённые слова</b>\n\nОтправьте слова и фразы через запятую. Регистр не учитывается.\n\nПри совпадении сообщение будет удалено, а участник получит варн.\nОтправьте <code>-</code>, чтобы очистить список."
+        : field === "domains"
+          ? "<b>Разрешённые домены</b>\n\nОтправьте домены через запятую, например:\n<code>youtube.com, github.com, ravvo.ru</code>\n\nСсылки на эти сайты не будут удаляться. <code>-</code> — очистить список."
+          : "<b>Лимит предупреждений</b>\n\nВведите число от 1 до 20.\n\nПосле достижения лимита бот применит автоматическое наказание, выбранное в настройках группы.";
+    await c.reply(prompt, { parse_mode: "HTML" });
   });
   bot.callbackQuery("menu:moderation", async (c) => {
     await c.answerCallbackQuery();
@@ -293,6 +394,40 @@ export function installBotMenus(bot: Bot) {
     if (flow.kind === "decision") {
       flows.delete(key(c));
       return sendDecision(bot, c, flow.userId, flow.accepted, text);
+    }
+
+    if (flow.kind === "protection") {
+      const current = await getSettings(flow.groupId);
+      if (flow.step === "warnLimit") {
+        const limit = Number(text);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+          return c.reply("<b>Неверное значение</b>\n\nВведите целое число от 1 до 20.", { parse_mode: "HTML" });
+        }
+        await saveSettings(flow.groupId, { ...current, warnLimit: limit });
+        flows.delete(key(c));
+        return c.reply(
+          `<b>Лимит сохранён</b>\n\nПосле ${limit} предупреждений бот автоматически применит выбранное наказание.`,
+          { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Открыть защиту", `protect:open:${flow.groupId}`) },
+        );
+      }
+      const values =
+        text === "-"
+          ? []
+          : [...new Set(text.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean))].slice(0, 200);
+      if (flow.step === "words") {
+        await saveSettings(flow.groupId, { ...current, badWords: values, badWordsEnabled: values.length > 0 });
+        flows.delete(key(c));
+        return c.reply(
+          `<b>Список стоп-слов обновлён</b>\n\nФраз в списке: ${values.length}.\n${values.length ? "Фильтр включён. Совпадения будут удаляться, участники получат варн." : "Фильтр выключен, потому что список пуст."}`,
+          { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Открыть защиту", `protect:open:${flow.groupId}`) },
+        );
+      }
+      await saveSettings(flow.groupId, { ...current, allowedDomains: values });
+      flows.delete(key(c));
+      return c.reply(
+        `<b>Разрешённые домены обновлены</b>\n\nДоменов в списке: ${values.length}.\nЗащита ссылок не будет удалять ссылки на эти адреса.`,
+        { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Открыть защиту", `protect:open:${flow.groupId}`) },
+      );
     }
 
     if (flow.kind === "rules") {
