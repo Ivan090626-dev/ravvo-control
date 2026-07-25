@@ -9,7 +9,7 @@ async function remove(c, reason) { try {
     await c.deleteMessage();
 }
 catch { } try {
-    await c.reply(`🛡 <b>Ravvo AutoMod</b> удалил сообщение.\nПричина: ${esc(reason)}\n\n<i>Защита сообщества — Ravvo</i>`, { parse_mode: "HTML" });
+    await c.reply(`<b>Сообщение удалено</b>\n${esc(reason)}`, { parse_mode: "HTML" });
 }
 catch { } }
 export async function automod(c, next) {
@@ -23,11 +23,11 @@ export async function automod(c, next) {
             const user = u.username ? `@${u.username}` : u.first_name;
             if (settings.captchaEnabled) {
                 await c.api.restrictChatMember(c.chat.id, u.id, restricted, { until_date: Math.floor(Date.now() / 1000) + settings.captchaMinutes * 60 });
-                const kb = new InlineKeyboard().text("✅ Я человек", `verify:${c.chat.id}:${u.id}`);
-                await c.reply(`🧩 <b>Проверка Ravvo</b>\n\n${esc(user)}, подтвердите вход в течение ${settings.captchaMinutes} мин.`, { parse_mode: "HTML", reply_markup: kb });
+                const kb = new InlineKeyboard().text("Подтвердить вход", `verify:${c.chat.id}:${u.id}`);
+                await c.reply(`<b>Проверка участника</b>\n\n${esc(user)}, нажмите кнопку в течение ${settings.captchaMinutes} мин.`, { parse_mode: "HTML", reply_markup: kb });
             }
             else if (settings.welcomeEnabled)
-                await c.reply(`👋 <b>Добро пожаловать!</b>\n\n${esc(render(settings.welcomeText, user, group))}\n\n<i>Сообщество управляется Ravvo</i>`, { parse_mode: "HTML" });
+                await c.reply(`<b>Добро пожаловать</b>\n\n${esc(render(settings.welcomeText, user, group))}`, { parse_mode: "HTML" });
         }
         if (settings.deleteServiceMessages)
             try {
@@ -39,7 +39,7 @@ export async function automod(c, next) {
     if (c.message.left_chat_member) {
         if (settings.goodbyeEnabled) {
             const u = c.message.left_chat_member, user = u.username ? `@${u.username}` : u.first_name;
-            await c.reply(`👋 ${esc(render(settings.goodbyeText, user, group))}\n\n<i>Ravvo</i>`, { parse_mode: "HTML" });
+            await c.reply(esc(render(settings.goodbyeText, user, group)), { parse_mode: "HTML" });
         }
         if (settings.deleteServiceMessages)
             try {

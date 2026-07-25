@@ -7,6 +7,7 @@ import { automod, verifyCaptcha } from "./automod.js";
 import { getSettings } from "./groupSettings.js";
 import { installBotMenus, sendMainMenu } from "./botMenus.js";
 import { installExtraCommands } from "./extraCommands.js";
+import { sendSticker } from "./brand.js";
 export const bot = new Bot(config.BOT_TOKEN);
 const no = { can_send_messages: false, can_send_audios: false, can_send_documents: false, can_send_photos: false, can_send_videos: false, can_send_video_notes: false, can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false, can_add_web_page_previews: false, can_change_info: false, can_invite_users: false, can_pin_messages: false, can_manage_topics: false }, yes = { ...no, can_send_messages: true, can_send_audios: true, can_send_documents: true, can_send_photos: true, can_send_videos: true, can_send_video_notes: true, can_send_voice_notes: true, can_send_polls: true, can_send_other_messages: true, can_add_web_page_previews: true, can_invite_users: true };
 const name = (u) => [u.first_name, u.last_name].filter(Boolean).join(" ");
@@ -25,40 +26,40 @@ bot.use(async (c, next) => { if (c.chat && c.from && ["group", "supergroup"].inc
 bot.use(automod);
 bot.callbackQuery(/^verify:/, verifyCaptcha);
 async function guard(c, p) { if (c.chat && c.from && await allow(String(c.chat.id), String(c.from.id), p))
-    return true; await c.reply(ravvo("⛔ У вашей роли нет этого разрешения.")); return false; }
+    return true; await c.reply("<b>Недостаточно прав</b>\n\nОбратитесь к владельцу группы.", { parse_mode: "HTML" }); return false; }
 async function target(c, a) { const u = c.message?.reply_to_message?.from; if (u)
     return { id: u.id, name: name(u), used: 0 }; const raw = a[0]; if (!raw)
     return null; const groupId = String(c.chat.id), m = raw.startsWith("@") ? await db.member.findFirst({ where: { groupId, username: raw.slice(1) } }) : await db.member.findUnique({ where: { groupId_telegramId: { groupId, telegramId: raw } } }); return m ? { id: Number(m.telegramId), name: m.name, used: 1 } : null; }
 async function record(c, d) { await db.modAction.create({ data: { groupId: String(c.chat.id), type: d.type, actorId: String(c.from.id), actorName: name(c.from), targetId: d.t ? String(d.t.id) : null, targetName: d.t?.name, reason: d.reason, expiresAt: d.expiresAt, status: d.status ?? (d.expiresAt ? "ACTIVE" : "RESOLVED") } }); }
-bot.command("start", sendMainMenu);
+bot.command("start", async (c) => { await sendSticker(c, "welcome"); await sendMainMenu(c); });
 bot.command("help", c => c.reply("<b>Справка Ravvo</b>\n\n<b>Управление</b>\n/menu · /settings · /reload\n\n<b>Модерация</b>\n/ban · /unban · /kick · /mute · /unmute\n/warn · /unwarn · /warns · /delete · /purge\n\n<b>Группа</b>\n/rules · /setrules · /announce · /send\n/pin · /pinned · /unpinall · /silence · /unsilence\n\n<b>Информация</b>\n/info · /staff · /me · /chatid · /link\n\n<b>Сервис</b>\n/order · /report\n\nИспользуйте команды модерации ответом на сообщение пользователя.", { parse_mode: "HTML" }));
 for (const command of ["ban", "mute"])
     bot.command(command, async (c) => { const type = command.toUpperCase(); if (!await guard(c, type))
         return; const a = c.match.trim().split(/\s+/).filter(Boolean), t = await target(c, a); if (!t)
-        return void c.reply(ravvo("Ответьте на сообщение или укажите известный ID/@username.")); const ms = duration(a[t.used]); if (!ms)
-        return void c.reply(ravvo("Укажите срок: 15m, 2h или 7d.")); const reason = a.slice(t.used + 1).join(" ") || "Причина не указана", until = new Date(Date.now() + ms); if (type === "BAN")
+        return void c.reply("<b>Участник не найден</b>\n\nОтветьте на сообщение или укажите ID/@username.", { parse_mode: "HTML" }); const ms = duration(a[t.used]); if (!ms)
+        return void c.reply("<b>Укажите срок</b>\n\nНапример: <code>15m</code>, <code>2h</code> или <code>7d</code>.", { parse_mode: "HTML" }); const reason = a.slice(t.used + 1).join(" ") || "Без причины", until = new Date(Date.now() + ms); if (type === "BAN")
         await c.api.banChatMember(c.chat.id, t.id, { until_date: Math.floor(until.getTime() / 1000) });
     else
-        await c.api.restrictChatMember(c.chat.id, t.id, no, { until_date: Math.floor(until.getTime() / 1000) }); await record(c, { type, t, reason, expiresAt: until }); await c.reply(ravvo(`✅ ${type === "BAN" ? "Бан" : "Мут"}: ${t.name}\nПричина: ${reason}`)); });
+        await c.api.restrictChatMember(c.chat.id, t.id, no, { until_date: Math.floor(until.getTime() / 1000) }); await record(c, { type, t, reason, expiresAt: until }); await c.reply(`<b>${type === "BAN" ? "Участник заблокирован" : "Участник ограничен"}</b>\n\n${esc(t.name)}\nПричина: ${esc(reason)}`, { parse_mode: "HTML" }); });
 bot.command("unmute", async (c) => { if (!await guard(c, "MUTE"))
     return; const a = c.match.trim().split(/\s+/), t = await target(c, a); if (!t)
-    return void c.reply(ravvo("Укажите пользователя ответом или ID.")); await c.api.restrictChatMember(c.chat.id, t.id, yes); await db.modAction.updateMany({ where: { groupId: String(c.chat.id), targetId: String(t.id), type: "MUTE", status: "ACTIVE" }, data: { status: "RESOLVED", resolvedAt: new Date() } }); await record(c, { type: "UNMUTE", t }); await c.reply(ravvo(`✅ Мут снят: ${t.name}`)); });
+    return void c.reply("Ответьте на сообщение или укажите ID."); await c.api.restrictChatMember(c.chat.id, t.id, yes); await db.modAction.updateMany({ where: { groupId: String(c.chat.id), targetId: String(t.id), type: "MUTE", status: "ACTIVE" }, data: { status: "RESOLVED", resolvedAt: new Date() } }); await record(c, { type: "UNMUTE", t }); await c.reply(`<b>Ограничение снято</b>\n\n${esc(t.name)}`, { parse_mode: "HTML" }); });
 bot.command("kick", async (c) => { if (!await guard(c, "KICK"))
     return; const a = c.match.trim().split(/\s+/), t = await target(c, a); if (!t)
-    return void c.reply(ravvo("Укажите пользователя.")); const reason = a.slice(t.used).join(" ") || "Причина не указана"; await c.api.banChatMember(c.chat.id, t.id); await c.api.unbanChatMember(c.chat.id, t.id); await record(c, { type: "KICK", t, reason }); await c.reply(ravvo(`✅ Исключён: ${t.name}`)); });
+    return void c.reply("Ответьте на сообщение или укажите ID."); const reason = a.slice(t.used).join(" ") || "Без причины"; await c.api.banChatMember(c.chat.id, t.id); await c.api.unbanChatMember(c.chat.id, t.id); await record(c, { type: "KICK", t, reason }); await c.reply(`<b>Участник исключён</b>\n\n${esc(t.name)}\nПричина: ${esc(reason)}`, { parse_mode: "HTML" }); });
 bot.command("delete", async (c) => { if (!await guard(c, "DELETE"))
     return; const id = c.message?.reply_to_message?.message_id; if (!id)
     return void c.reply(ravvo("Используйте /delete ответом на сообщение.")); await c.api.deleteMessage(c.chat.id, id); await record(c, { type: "DELETE" }); try {
     await c.deleteMessage();
 }
 catch { } });
-bot.command("rules", async (c) => { const g = await db.group.findUnique({ where: { id: String(c.chat.id) } }); await c.reply(`<b>Правила группы</b>\n\n${esc(g?.rules ?? "Не настроены")}\n\n<i>Управление сообществом — Ravvo</i>`, { parse_mode: "HTML" }); });
+bot.command("rules", async (c) => { const g = await db.group.findUnique({ where: { id: String(c.chat.id) } }); await c.reply(`<b>Правила сообщества</b>\n\n${esc(g?.rules ?? "Правила пока не добавлены.")}`, { parse_mode: "HTML" }); });
 bot.command("setrules", async (c) => { if (!await guard(c, "RULES_MANAGE"))
     return; const rules = c.match.trim(); if (!rules)
-    return void c.reply(ravvo("Добавьте текст правил.")); await db.group.update({ where: { id: String(c.chat.id) }, data: { rules } }); await record(c, { type: "RULES_UPDATE", reason: "Правила обновлены" }); await c.reply(ravvo("✅ Правила сохранены.")); });
+    return void c.reply("Добавьте текст после /setrules."); await db.group.update({ where: { id: String(c.chat.id) }, data: { rules } }); await record(c, { type: "RULES_UPDATE", reason: "Правила обновлены" }); await c.reply("<b>Правила сохранены</b>", { parse_mode: "HTML" }); });
 bot.command("announce", async (c) => { if (!await guard(c, "ANNOUNCE"))
     return; const text = c.match.trim(); if (!text)
-    return void c.reply(ravvo("Добавьте текст.")); const m = await c.reply(`📣 <b>Объявление</b>\n\n${esc(text)}\n\n<i>Опубликовано через Ravvo</i>`, { parse_mode: "HTML" }); await db.announcement.create({ data: { groupId: String(c.chat.id), authorId: String(c.from?.id ?? 0), text, messageId: String(m.message_id) } }); await record(c, { type: "ANNOUNCE", reason: text.slice(0, 200) }); });
+    return void c.reply("Добавьте текст после /announce."); const m = await c.reply(`<b>Объявление</b>\n\n${esc(text)}`, { parse_mode: "HTML" }); await db.announcement.create({ data: { groupId: String(c.chat.id), authorId: String(c.from?.id ?? 0), text, messageId: String(m.message_id) } }); await record(c, { type: "ANNOUNCE", reason: text.slice(0, 200) }); });
 bot.command("role", async (c) => { if (!await guard(c, "ROLE_MANAGE"))
     return; const a = c.match.trim().split(/\s+/), op = a.shift(), t = await target(c, a); if (!t || !["give", "remove"].includes(op ?? ""))
     return void c.reply(ravvo("/role give|remove [user] роль")); const role = await db.role.findUnique({ where: { groupId_name: { groupId: String(c.chat.id), name: a[t.used]?.toLowerCase() ?? "" } } }), m = await db.member.findUnique({ where: { groupId_telegramId: { groupId: String(c.chat.id), telegramId: String(t.id) } } }); if (!role || !m)
@@ -68,7 +69,7 @@ else
     await db.memberRole.deleteMany({ where: { memberId: m.id, roleId: role.id } }); await record(c, { type: `ROLE_${(op ?? "").toUpperCase()}`, t, reason: role.name }); await c.reply(ravvo("✅ Роль обновлена.")); });
 bot.command("warn", async (c) => { if (!await guard(c, "MUTE"))
     return; const a = c.match.trim().split(/\s+/), t = await target(c, a); if (!t)
-    return void c.reply(ravvo("Используйте /warn ответом на сообщение или укажите ID.")); const reason = a.slice(t.used).join(" ") || "Нарушение правил"; await record(c, { type: "WARN", t, reason, status: "ACTIVE" }); const count = await db.modAction.count({ where: { groupId: String(c.chat.id), targetId: String(t.id), type: "WARN", status: "ACTIVE" } }), settings = await getSettings(String(c.chat.id)); if (count >= settings.warnLimit) {
+    return void c.reply("Ответьте на сообщение или укажите ID."); const reason = a.slice(t.used).join(" ") || "Нарушение правил"; await record(c, { type: "WARN", t, reason, status: "ACTIVE" }); const count = await db.modAction.count({ where: { groupId: String(c.chat.id), targetId: String(t.id), type: "WARN", status: "ACTIVE" } }), settings = await getSettings(String(c.chat.id)); if (count >= settings.warnLimit) {
     if (settings.warnAction === "ban")
         await c.api.banChatMember(c.chat.id, t.id);
     else if (settings.warnAction === "kick") {
@@ -78,17 +79,17 @@ bot.command("warn", async (c) => { if (!await guard(c, "MUTE"))
     else
         await c.api.restrictChatMember(c.chat.id, t.id, no, { until_date: Math.floor(Date.now() / 1000) + 3600 });
     await db.modAction.updateMany({ where: { groupId: String(c.chat.id), targetId: String(t.id), type: "WARN", status: "ACTIVE" }, data: { status: "RESOLVED", resolvedAt: new Date() } });
-} await c.reply(ravvo(`⚠️ Предупреждение для ${t.name}\nПричина: ${reason}\nВсего: ${count}/${settings.warnLimit}`)); });
+} await c.reply(`<b>Предупреждение выдано</b>\n\n${esc(t.name)}\n${esc(reason)}\n\n${count} из ${settings.warnLimit}`, { parse_mode: "HTML" }); });
 bot.command("unwarn", async (c) => { if (!await guard(c, "MUTE"))
     return; const a = c.match.trim().split(/\s+/), t = await target(c, a); if (!t)
     return void c.reply(ravvo("Укажите пользователя.")); const last = await db.modAction.findFirst({ where: { groupId: String(c.chat.id), targetId: String(t.id), type: "WARN", status: "ACTIVE" }, orderBy: { createdAt: "desc" } }); if (last)
     await db.modAction.update({ where: { id: last.id }, data: { status: "RESOLVED", resolvedAt: new Date() } }); await c.reply(ravvo(last ? "✅ Одно предупреждение снято." : "Активных предупреждений нет.")); });
 bot.command("report", async (c) => { if (!c.message || !c.from)
     return; const msg = c.message.reply_to_message; if (!msg)
-    return void c.reply(ravvo("Используйте /report ответом на проблемное сообщение.")); const reporter = c.from.username ? `@${c.from.username}` : name(c.from), targetName = msg.from ? (msg.from.username ? `@${msg.from.username}` : name(msg.from)) : "неизвестного пользователя"; await c.reply(`🚨 <b>Жалоба участника</b>\n\n<b>От:</b> ${esc(reporter)}\n<b>На:</b> ${esc(targetName)}\nАдминистраторы, проверьте сообщение выше.\n\n<i>Ravvo Report System</i>`, { parse_mode: "HTML", reply_parameters: { message_id: msg.message_id } }); });
+    return void c.reply("Ответьте командой /report на сообщение."); const reporter = c.from.username ? `@${c.from.username}` : name(c.from), targetName = msg.from ? (msg.from.username ? `@${msg.from.username}` : name(msg.from)) : "неизвестного пользователя"; await c.reply(`<b>Жалоба отправлена</b>\n\nОт: ${esc(reporter)}\nНа: ${esc(targetName)}\n\nАдминистраторы получили уведомление.`, { parse_mode: "HTML", reply_parameters: { message_id: msg.message_id } }); });
 installExtraCommands(bot);
 installBotMenus(bot);
-bot.catch(e => { console.error(e.error); e.ctx.reply(ravvo("⚠️ Не удалось выполнить действие. Проверьте права бота.")).catch(() => { }); });
+bot.catch(e => { console.error(e.error); e.ctx.reply("<b>Не удалось выполнить действие</b>\n\nПроверьте права бота и формат команды.", { parse_mode: "HTML" }).catch(() => { }); });
 export async function expire() { const list = await db.modAction.findMany({ where: { status: "ACTIVE", expiresAt: { lte: new Date() } } }); for (const a of list)
     try {
         if (a.type === "BAN" && a.targetId)

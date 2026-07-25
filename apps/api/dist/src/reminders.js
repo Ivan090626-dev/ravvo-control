@@ -7,7 +7,7 @@ export async function processReminders() { if (running)
     const due = await db.reminder.findMany({ where: { enabled: true, nextRunAt: { lte: new Date() } }, take: 50 });
     for (const item of due)
         try {
-            await bot.api.sendMessage(Number(item.groupId), `⏰ <b>Напоминание</b>\n\n${esc(item.text)}\n\n<i>Автоматическое сообщение · Ravvo</i>`, { parse_mode: "HTML" });
+            await bot.api.sendMessage(Number(item.groupId), `<b>Напоминание</b>\n\n${esc(item.text)}`, { parse_mode: "HTML" });
             const now = new Date(), next = new Date(now.getTime() + item.intervalHours * 3_600_000);
             await db.reminder.update({ where: { id: item.id }, data: { lastRunAt: now, nextRunAt: next } });
         }

@@ -1,13 +1,12 @@
-import { InlineKeyboard, InputFile } from "grammy";
-import { join } from "node:path";
+import { InlineKeyboard } from "grammy";
 import { config } from "./config.js";
 import { db } from "./db.js";
 import { getSettings, saveSettings } from "./groupSettings.js";
 import { allow } from "./security.js";
 import { esc } from "./utils.js";
+import { sendSticker, sticker } from "./brand.js";
 const flows = new Map();
 const key = (c) => `${c.chat?.id}:${c.from?.id}`;
-const banner = () => new InputFile(join(process.cwd(), "apps", "api", "assets", "ravvo-banner.png"));
 const mainKeyboard = () => new InlineKeyboard()
     .text("Создать пост", "menu:post")
     .text("Правила", "menu:rules")
@@ -21,15 +20,10 @@ const mainKeyboard = () => new InlineKeyboard()
     .row()
     .text("Команды", "menu:commands");
 export async function sendMainMenu(c) {
-    const caption = "<b>Ravvo</b>\n\n" +
-        "Управление группой прямо в Telegram.\n" +
-        "Выберите действие.";
-    try {
-        await c.replyWithPhoto(banner(), { caption, parse_mode: "HTML", reply_markup: mainKeyboard() });
-    }
-    catch {
-        await c.reply(caption, { parse_mode: "HTML", reply_markup: mainKeyboard() });
-    }
+    const caption = "<b>Ravvo</b>\n" +
+        "Управление сообществом\n\n" +
+        "Выберите раздел.";
+    await c.reply(caption, { parse_mode: "HTML", reply_markup: mainKeyboard() });
 }
 async function denied(c) {
     await c.reply("<b>Нет доступа</b>\n\nФункция доступна администраторам.", {
@@ -98,6 +92,9 @@ async function sendDecision(bot, c, userId, accepted, reason) {
         : "Администратор Ravvo рассмотрел заказ и пока не может его принять.";
     const reasonBlock = reason ? `\n\n💬 <b>Комментарий администратора:</b>\n${esc(reason)}` : "";
     await bot.api
+        .sendSticker(userId, sticker("success"))
+        .catch(() => { });
+    await bot.api
         .sendMessage(userId, `${title}\n\n${body}${reasonBlock}`, { parse_mode: "HTML" })
         .catch(() => { });
     await c.reply(`<b>Решение отправлено</b>${reason ? "\n\nКомментарий добавлен." : ""}`, {
@@ -147,23 +144,24 @@ export function installBotMenus(bot) {
     });
     bot.callbackQuery("menu:moderation", async (c) => {
         await c.answerCallbackQuery();
-        await c.reply("🛡 <b>ЦЕНТР МОДЕРАЦИИ</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-            "Команды используйте в группе ответом на сообщение:\n\n" +
-            "🔨 <code>/ban 15m причина</code>\n" +
-            "🔇 <code>/mute 1h причина</code>\n" +
-            "🔊 <code>/unmute</code>\n" +
-            "🚪 <code>/kick причина</code>\n" +
-            "🗑 <code>/delete</code>\n" +
-            "⚠️ <code>/warn причина</code>\n" +
-            "✅ <code>/unwarn</code>\n\n" +
-            "<i>Права проверяются автоматически</i>", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("◀️ ГЛАВНОЕ МЕНЮ", "menu:home") });
+        await sendSticker(c, "moderator");
+        await c.reply("<b>Модерация</b>\n\n" +
+            "Используйте команду ответом на сообщение.\n\n" +
+            "<code>/ban 15m причина</code>\n" +
+            "<code>/mute 1h причина</code>\n" +
+            "<code>/unmute</code>\n" +
+            "<code>/kick причина</code>\n" +
+            "<code>/delete</code>\n" +
+            "<code>/warn причина</code>\n" +
+            "<code>/unwarn</code>", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Назад", "menu:home") });
     });
     bot.callbackQuery("menu:commands", async (c) => {
         await c.answerCallbackQuery();
-        await c.reply("📚 <b>КОМАНДЫ RAVVO</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-            "/menu — главное меню\n/order — заказать Java-плагин\n/rules — показать правила\n/report — пожаловаться\n/announce — публикация\n/setrules — изменить правила\n" +
-            "/ban · /mute · /unmute · /kick\n/delete · /warn · /unwarn\n/role give|remove — управление ролями\n\n" +
-            "<i>Бот принадлежит Ravvo</i>", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("◀️ ГЛАВНОЕ МЕНЮ", "menu:home") });
+        await c.reply("<b>Команды</b>\n\n" +
+            "<b>Управление</b>\n/menu · /settings · /reload\n\n" +
+            "<b>Модерация</b>\n/ban · /unban · /kick · /mute · /unmute\n/warn · /unwarn · /warns · /delete · /purge\n\n" +
+            "<b>Публикации</b>\n/announce · /send · /pin · /unpinall\n\n" +
+            "<b>Информация</b>\n/info · /staff · /rules · /link", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Назад", "menu:home") });
     });
     bot.callbackQuery(/^request:(accept|reject):(\d+)$/, async (c) => {
         if (!c.from || String(c.from.id) !== config.ADMIN_TELEGRAM_ID) {
@@ -174,7 +172,7 @@ export function installBotMenus(bot) {
         flows.set(key(c), { kind: "decision", step: "reason", userId, accepted });
         await c.answerCallbackQuery({ text: accepted ? "Вы выбрали: принять" : "Вы выбрали: отклонить" });
         await c.editMessageReplyMarkup({
-            reply_markup: new InlineKeyboard().text(accepted ? "✅ ВЫБРАНО: ПРИНЯТЬ" : "❌ ВЫБРАНО: ОТКЛОНИТЬ", "done"),
+            reply_markup: new InlineKeyboard().text(accepted ? "✓ Принять" : "× Отклонить", "done"),
         });
         await c.reply(`<b>${accepted ? "Принять заказ" : "Отклонить заказ"}</b>\n\nНапишите комментарий покупателю.`, {
             parse_mode: "HTML",
@@ -242,6 +240,7 @@ export function installBotMenus(bot) {
                         .text("× Отклонить", `request:reject:${user.id}`),
                 });
             }
+            await sendSticker(c, "success");
             return c.reply("<b>Заказ отправлен</b>\n\nВы получите уведомление после решения.", { parse_mode: "HTML", reply_markup: mainKeyboard() });
         }
         if (flow.kind === "decision") {
@@ -251,10 +250,11 @@ export function installBotMenus(bot) {
         if (flow.kind === "rules") {
             await db.group.update({ where: { id: flow.groupId }, data: { rules: text } });
             flows.delete(key(c));
-            await bot.api.sendMessage(Number(flow.groupId), `📜 <b>ПРАВИЛА ГРУППЫ</b>\n━━━━━━━━━━━━━━━━━━━━\n\n${esc(text)}\n\n<i>Ravvo</i>`, {
+            await bot.api.sendMessage(Number(flow.groupId), `<b>Правила сообщества</b>\n\n${esc(text)}`, {
                 parse_mode: "HTML",
             });
-            return c.reply("✅ <b>ПРАВИЛА СОХРАНЕНЫ И ОПУБЛИКОВАНЫ</b>", { parse_mode: "HTML" });
+            await sendSticker(c, "success");
+            return c.reply("<b>Правила опубликованы</b>", { parse_mode: "HTML" });
         }
         if (flow.kind === "greeting" && flow.step === "welcome") {
             flow.welcomeText = text;
@@ -281,14 +281,14 @@ export function installBotMenus(bot) {
         if (flow.kind === "post" && flow.step === "text") {
             flow.text = text;
             flow.step = "buttons";
-            return c.reply("🔘 <b>КНОПКИ ДЛЯ ПОСТА</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-                "Каждая кнопка с новой строки:\n<code>Название | https://ссылка.ru</code>\n\n" +
-                "Можно добавить до 12 кнопок.\nОтправьте <code>-</code>, если кнопки не нужны.", { parse_mode: "HTML" });
+            return c.reply("<b>Кнопки</b>\n\n" +
+                "Одна кнопка на строку:\n<code>Название | https://ссылка.ru</code>\n\n" +
+                "До 12 кнопок. <code>-</code> — без кнопок.", { parse_mode: "HTML" });
         }
         if (flow.kind === "post") {
             const buttons = parseButtons(text);
             if (!buttons) {
-                return c.reply("⚠️ Неверный формат. Используйте:\n<code>Название | https://ссылка.ru</code>", { parse_mode: "HTML" });
+                return c.reply("<b>Не удалось прочитать кнопки</b>\n\nИспользуйте:\n<code>Название | https://ссылка.ru</code>", { parse_mode: "HTML" });
             }
             const keyboard = new InlineKeyboard();
             buttons.forEach((button, index) => {
@@ -296,7 +296,7 @@ export function installBotMenus(bot) {
                 if (index % 2 === 1)
                     keyboard.row();
             });
-            const sent = await bot.api.sendMessage(Number(flow.groupId), `📣 <b>ОБЪЯВЛЕНИЕ</b>\n━━━━━━━━━━━━━━━━━━━━\n\n${esc(flow.text ?? "")}\n\n<i>Опубликовано через Ravvo</i>`, { parse_mode: "HTML", reply_markup: keyboard });
+            const sent = await bot.api.sendMessage(Number(flow.groupId), `<b>Объявление</b>\n\n${esc(flow.text ?? "")}`, { parse_mode: "HTML", reply_markup: keyboard });
             await db.announcement.create({
                 data: {
                     groupId: flow.groupId,
@@ -307,17 +307,18 @@ export function installBotMenus(bot) {
                 },
             });
             flows.delete(key(c));
-            return c.reply("✅ <b>ПОСТ ОПУБЛИКОВАН</b>", { parse_mode: "HTML", reply_markup: mainKeyboard() });
+            await sendSticker(c, "success");
+            return c.reply("<b>Пост опубликован</b>", { parse_mode: "HTML", reply_markup: mainKeyboard() });
         }
         if (flow.kind === "reminder" && flow.step === "text") {
             flow.text = text;
             flow.step = "interval";
-            return c.reply("⏱ <b>ИНТЕРВАЛ</b>\n\nЧерез сколько часов повторять сообщение?\nНапример: <code>1</code>, <code>6</code>, <code>24</code>", { parse_mode: "HTML" });
+            return c.reply("<b>Интервал</b>\n\nЧерез сколько часов повторять сообщение?\nНапример: <code>1</code>, <code>6</code>, <code>24</code>", { parse_mode: "HTML" });
         }
         if (flow.kind === "reminder") {
             const hours = Number(text.replace(",", "."));
             if (!Number.isFinite(hours) || hours < 0.25 || hours > 8760) {
-                return c.reply("⚠️ Введите число от <code>0.25</code> до <code>8760</code>.", { parse_mode: "HTML" });
+                return c.reply("<b>Неверный интервал</b>\n\nВведите число от <code>0.25</code> до <code>8760</code>.", { parse_mode: "HTML" });
             }
             await db.reminder.create({
                 data: {
@@ -328,7 +329,8 @@ export function installBotMenus(bot) {
                 },
             });
             flows.delete(key(c));
-            return c.reply(`✅ <b>НАПОМИНАНИЕ СОЗДАНО</b>\n\nИнтервал: каждые ${hours} ч.`, {
+            await sendSticker(c, "success");
+            return c.reply(`<b>Напоминание создано</b>\n\nКаждые ${hours} ч.`, {
                 parse_mode: "HTML",
                 reply_markup: mainKeyboard(),
             });
