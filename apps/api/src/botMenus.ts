@@ -8,6 +8,7 @@ import { sendSticker, sticker } from "./brand.js";
 
 type Flow =
   | { kind: "plugin"; step: "idea" | "version" | "core" | "java" | "budget"; idea?: string; version?: string; core?: string; java?: string }
+  | { kind: "service"; step: "description" | "budget"; service: "discord" | "python" | "website"; description?: string }
   | { kind: "post"; step: "text" | "buttons"; groupId: string; text?: string }
   | { kind: "rules"; step: "text"; groupId: string }
   | { kind: "reminder"; step: "text" | "interval"; groupId: string; text?: string }
@@ -18,23 +19,41 @@ type Flow =
 const flows = new Map<string, Flow>();
 const key = (c: Context) => `${c.chat?.id}:${c.from?.id}`;
 const mainKeyboard = (addUrl?: string) => {
-  const keyboard = new InlineKeyboard();
-  if (addUrl) keyboard.url("Добавить Ravvo в группу", addUrl).row();
-  return keyboard
-    .text("Создать пост", "menu:post")
+  const keyboard = new InlineKeyboard()
+    .text("Заказать", "order:start")
+    .text("Модерация", "menu:moderation")
+    .row();
+  if (addUrl) keyboard.url("Добавить бота в группу", addUrl);
+  return keyboard;
+};
+
+const orderKeyboard = () =>
+  new InlineKeyboard()
+    .text("Discord-сервер", "order:discord")
+    .row()
+    .text("Java-плагин", "order:java")
+    .row()
+    .text("Python-бот", "order:python")
+    .row()
+    .text("Информационный сайт", "order:website")
+    .row()
+    .text("Назад", "menu:home");
+
+const moderationKeyboard = () =>
+  new InlineKeyboard()
+    .text("Публикации", "menu:post")
     .text("Правила", "menu:rules")
     .row()
     .text("Напоминания", "menu:reminder")
-    .text("Модерация", "menu:moderation")
+    .text("Приветствия", "menu:greeting")
     .row()
     .text("Защита группы", "menu:protection")
     .row()
-    .text("Приветствие и прощание", "menu:greeting")
+    .text("Команды модерации", "menu:modcommands")
     .row()
-    .text("Заказать Java-плагин", "plugin:start")
+    .text("Полный список команд", "menu:commands")
     .row()
-    .text("Команды", "menu:commands");
-};
+    .text("Назад", "menu:home");
 
 export async function sendMainMenu(c: Context) {
   const me = await c.api.getMe();
@@ -51,9 +70,7 @@ export async function sendMainMenu(c: Context) {
   const caption =
     "👋 <b>Приветствую!</b>\n\n" +
     "Ravvo — виртуальный модератор вашей группы. Я помогу управлять участниками, публикациями, правилами и автоматической защитой сообщества.\n\n" +
-    "❗️ <b>Какие команды доступны?</b>\n" +
-    "Отправьте /help, чтобы открыть полный список возможностей.\n\n" +
-    "Чтобы подключить Ravvo, нажмите кнопку ниже и выберите группу, в которой у вас есть право добавлять администраторов.";
+    "Выберите нужный раздел: оформите заказ, откройте инструменты модерации или добавьте Ravvo в новую группу.";
   await c.reply(caption, { parse_mode: "HTML", reply_markup: mainKeyboard(addUrl) });
 }
 
@@ -220,10 +237,9 @@ async function sendDecision(bot: Bot, c: Context, userId: number, accepted: bool
 export function installBotMenus(bot: Bot) {
   bot.command("menu", sendMainMenu);
   bot.command("order", async (c) => {
-    flows.set(key(c), { kind: "plugin", step: "idea" });
     await c.reply(
-      "<b>Заказ Java-плагина · 1/5</b>\n\nОпишите идею и функции.\n\n/cancel — отменить",
-      { parse_mode: "HTML" },
+      "<b>Новый заказ</b>\n\nВыберите направление. Заявка и ваши контактные данные будут переданы владельцу Ravvo.",
+      { parse_mode: "HTML", reply_markup: orderKeyboard() },
     );
   });
   bot.command("cancel", async (c) => {
@@ -235,11 +251,37 @@ export function installBotMenus(bot: Bot) {
     await c.answerCallbackQuery();
     await sendMainMenu(c);
   });
-  bot.callbackQuery("plugin:start", async (c) => {
+  bot.callbackQuery("order:start", async (c) => {
+    await c.answerCallbackQuery();
+    await c.reply(
+      "<b>Новый заказ</b>\n\nВыберите направление. После этого бот последовательно запросит техническое задание и предполагаемый бюджет.",
+      { parse_mode: "HTML", reply_markup: orderKeyboard() },
+    );
+  });
+  bot.callbackQuery("order:java", async (c) => {
     await c.answerCallbackQuery();
     flows.set(key(c), { kind: "plugin", step: "idea" });
     await c.reply(
       "<b>Заказ Java-плагина · 1/5</b>\n\nОпишите идею и функции.\n\n/cancel — отменить",
+      { parse_mode: "HTML" },
+    );
+  });
+  bot.callbackQuery(/^order:(discord|python|website)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const service = c.match[1] as "discord" | "python" | "website";
+    flows.set(key(c), { kind: "service", step: "description", service });
+    const names = {
+      discord: "Discord-сервер",
+      python: "Python-бот",
+      website: "Информационный сайт",
+    };
+    const hints = {
+      discord: "Опишите тематику сервера, необходимые каналы, роли, оформление, ботов и систему модерации.",
+      python: "Опишите назначение бота, команды, платформу работы, интеграции и ожидаемое поведение.",
+      website: "Опишите тематику сайта, необходимые разделы, стиль, контент, формы и контактные данные.",
+    };
+    await c.reply(
+      `<b>${names[service]} · 1/2</b>\n\n${hints[service]}\n\nОтправьте техническое задание одним сообщением.\n/cancel — отменить`,
       { parse_mode: "HTML" },
     );
   });
@@ -321,6 +363,15 @@ export function installBotMenus(bot: Bot) {
     await sendSticker(c, "moderator");
     await c.reply(
       "<b>Модерация</b>\n\n" +
+        "Здесь собраны все инструменты управления группой: публикации, правила, автоматические сообщения, защита от нарушений и команды для работы с участниками.\n\n" +
+        "Выберите раздел, который хотите настроить.",
+      { parse_mode: "HTML", reply_markup: moderationKeyboard() },
+    );
+  });
+  bot.callbackQuery("menu:modcommands", async (c) => {
+    await c.answerCallbackQuery();
+    await c.reply(
+      "<b>Модерация</b>\n\n" +
         "Используйте команду ответом на сообщение.\n\n" +
         "<code>/ban 15m причина</code>\n" +
         "<code>/mute 1h причина</code>\n" +
@@ -329,7 +380,7 @@ export function installBotMenus(bot: Bot) {
         "<code>/delete</code>\n" +
         "<code>/warn причина</code>\n" +
         "<code>/unwarn</code>",
-      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Назад", "menu:home") },
+      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Назад к модерации", "menu:moderation") },
     );
   });
   bot.callbackQuery("menu:commands", async (c) => {
@@ -340,7 +391,7 @@ export function installBotMenus(bot: Bot) {
         "<b>Модерация</b>\n/ban · /unban · /kick · /mute · /unmute\n/warn · /unwarn · /warns · /delete · /purge\n\n" +
         "<b>Публикации</b>\n/announce · /send · /pin · /unpinall\n\n" +
         "<b>Информация</b>\n/info · /staff · /rules · /link",
-      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Назад", "menu:home") },
+      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("Назад к модерации", "menu:moderation") },
     );
   });
   bot.callbackQuery(/^request:(accept|reject):(\d+)$/, async (c) => {
@@ -378,6 +429,46 @@ export function installBotMenus(bot: Bot) {
     if (!flow || c.message.text.startsWith("/")) return;
     const text = c.message.text.trim();
     if (!text) return;
+
+    if (flow.kind === "service") {
+      const serviceNames = {
+        discord: "Discord-сервер",
+        python: "Python-бот",
+        website: "Информационный сайт",
+      };
+      if (flow.step === "description") {
+        flow.description = text;
+        flow.step = "budget";
+        return c.reply(
+          `<b>${serviceNames[flow.service]} · 2/2</b>\n\n` +
+            "Укажите бюджет, который вы готовы выделить на работу.\n" +
+            "Например: <code>10 000 ₽</code>, <code>100 $</code> или <code>Нужна оценка</code>.",
+          { parse_mode: "HTML" },
+        );
+      }
+      flows.delete(key(c));
+      const user = c.from;
+      const username = user.username ? `@${user.username}` : "username не указан";
+      const card =
+        `<b>Новый заказ · ${serviceNames[flow.service]}</b>\n\n` +
+        `<b>Клиент</b>\n<a href="tg://user?id=${user.id}">${esc([user.first_name, user.last_name].filter(Boolean).join(" "))}</a> · ${esc(username)}\n` +
+        `Telegram ID: <code>${user.id}</code>\n\n` +
+        `<b>Бюджет</b>\n${esc(text)}\n\n` +
+        `<b>Техническое задание</b>\n${esc(flow.description ?? "Не указано")}`;
+      if (config.ADMIN_TELEGRAM_ID) {
+        await bot.api.sendMessage(Number(config.ADMIN_TELEGRAM_ID), card, {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard()
+            .text("✓ Принять", `request:accept:${user.id}`)
+            .text("× Отклонить", `request:reject:${user.id}`),
+        });
+      }
+      await sendSticker(c, "success");
+      return c.reply(
+        "<b>Заказ отправлен</b>\n\nВладелец Ravvo получил техническое задание, бюджет и ваши контактные данные. После рассмотрения бот сообщит решение.",
+        { parse_mode: "HTML", reply_markup: mainKeyboard() },
+      );
+    }
 
     if (flow.kind === "plugin") {
       if (flow.step === "idea") {
